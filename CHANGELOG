@@ -1,0 +1,78 @@
+0.1
+
+ - Initial version
+
+0.2
+
+ - Improved error handling
+ - Added AuthenticationError and ConnectionError exceptions
+ - Added ReconnectingTweetStream class that supports automatically
+   reconnecting if the connection is dropped
+
+0.3
+
+ - Fixed bugs in authtentication
+ - Added TrackStream and FollowStream classes
+ - Added list of endpoint names, and made them legal values for the url arg
+
+0.3.1
+
+ - Added lots of tests
+ - Added proper handling of keepalive newlines
+ - Improved handling of closing streams
+ - Added missing anyjson dependency to setup
+ - Fixed bug where newlines and malformed content were counted as a tweet
+
+0.3.2
+
+ - This release was skipped over, due to maintainer brainfart.
+
+0.3.3
+
+ - Fixed setup.py so it wont attempt to load modules that aren't installed
+   yet. Fixes installation issue.
+
+0.3.4
+
+ - Updated to latest twitter streaming urls
+ - Fixed a bug where we tried to call a method on None
+
+0.3.5
+
+ - Removed a spurious print statement left over from debugging
+ - Introduced common base class for all tweetstream exceptions
+ - Make sure we raise a sensible error on 404. Include url in desc of that error
+
+0.3.6
+
+ - Added LocationStream class for filtering on location bounding boxes.
+
+1.0.0
+
+ - Changed API to match latest twitter endpoints. This adds SampleStream and
+   FilterStream and deprecates TweetStream, FollowStream, LocationStream,
+   TrackStream and ReconnectingTweetStream.
+
+1.1.0
+
+ - Fixed issues #2 and #12, related to low volume streams not yielding tweets
+   until a relatively large buffer was filled. This meant that tweets would
+   arrive in bunches, not immediatly.
+ - Switched to HTTPS urls for streams. Twitter will switch off HTTP streams
+   on 29. sept. 2011.
+ - Added support for Python 3
+
+1.1.1
+
+ - Fixed issue #16. Odd case where python_version_tuple was returning ints
+   rather than the strings the docs promis. Make sure we always cast to int.
+
+1.2
+
+ - Added "raw" kwarg to stream classes. Returns raw tweets rather than
+   decoding the JSON.
+
+ - New, fine grained, disconnect exceptions. Adds a ReconnectableError
+   of which there are three subclases for different reconnect behaviours.
+
+ 

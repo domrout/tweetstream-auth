@@ -1,4 +1,5 @@
 README
+setup.py
 tweetstream/__init__.py
 tweetstream/deprecated.py
 tweetstream/streamclasses.py

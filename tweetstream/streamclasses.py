@@ -163,10 +163,8 @@ class BaseStream(object):
 
 
             except socket.error, e:
-                self.close()
                 raise ReconnectImmediatelyError("Server disconnected: %s" % (str(e)))
-
-
+        
     def next(self):
         """Return the next available tweet. This call is blocking!"""
         return self._iter.next()
@@ -177,8 +175,6 @@ class BaseStream(object):
         Close the connection to the streaming server.
         """
         self.connected = False
-        if self._conn:
-            self._conn.close()
 
 
 class SampleStream(BaseStream):

@@ -1,11 +1,9 @@
 import time
-import urllib
-import urllib2
 import socket
-from platform import python_version_tuple
 import anyjson
-import oauth2
 
+import requests
+from requests_oauthlib import OAuth1
 from . import AuthenticationError, ConnectionError, USER_AGENT
 from . import ReconnectImmediatelyError, ReconnectLinearlyError, ReconnectExponentiallyError
 
@@ -75,20 +73,19 @@ class BaseStream(object):
     def __init__(self, consumer_key, consumer_secret, access_token,
                  access_secret, catchup=None, raw=False, timeout=None,
                  url=None):
-        self._conn = None
         self._rate_ts = None
         self._rate_cnt = 0
         self._consumer_key = consumer_key
         self._consumer_secret = consumer_secret
         self._access_token = access_token
         self._access_secret = access_secret
-        self._catchup_count = catchup
         self._raw_mode = raw
         self._timeout = timeout
         self._iter = self.__iter__()
 
         self.rate_period = 10  # in seconds
         self.connected = False
+        self.response = None
         self.starttime = None
         self.count = 0
         self.rate = 0
@@ -105,59 +102,23 @@ class BaseStream(object):
     def _init_conn(self):
         """Open the connection to the twitter server"""
 
-        postdata = self._get_post_data() or {}
-        if self._catchup_count:
-            postdata["count"] = self._catchup_count
-        poststring = urllib.urlencode(postdata) if postdata else None
-
-        headers = { 'User-Agent': self.user_agent,
-                    'Authorization': self._get_oauth_header(postdata) }
-
-        req = urllib2.Request(self.url, poststring, headers)
+        auth = OAuth1(self._consumer_key, self._consumer_secret,
+                  self._access_token, self._access_secret)
 
         # If connecting fails, convert to ReconnectExponentiallyError so
         # clients can implement appropriate backoff.
         try:
-            self._conn = urllib2.urlopen(req, timeout=self._timeout)
-        except urllib2.HTTPError, x:
-            if x.code == 401:
-                raise AuthenticationError(str(x))
-            elif x.code == 404:
-                raise ReconnectExponentiallyError("%s: %s" % (self.url, x))
-            else:
-                raise ReconnectExponentiallyError(str(x))
-        except urllib2.URLError, x:
+            self.response = requests.post(self.url, 
+                stream=True,
+                auth=auth,
+                data=self._get_post_data()
+                )
+            if self.response.status_code == 401:
+                raise AuthenticationError("Could not authenticate with Twitter")
+            elif self.response.status_code == 404:
+                raise ReconnectExponentiallyError("%s: %s" % (self.url, self.response))
+        except requests.exceptions.HTTPError, x:           
             raise ReconnectExponentiallyError(str(x))
-
-        # This is horrible. This line grabs the raw socket (actually an ssl
-        # wrapped socket) from the guts of urllib2/httplib. We want the raw
-        # socket so we can bypass the buffering that those libs provide.
-        # The buffering is reasonable when dealing with connections that
-        # try to finish as soon as possible. With twitters' never ending
-        # connections, it causes a bug where we would not deliver tweets
-        # until the buffer was full. That's problematic for very low volume
-        # filterstreams, since you might not see a tweet for minutes or hours
-        # after they occured while the buffer fills.
-        #
-        # Oh, and the inards of the http libs are different things on in
-        # py2 and 3, so need to deal with that. py3 libs do more of what I
-        # want by default, but I wont do more special casing for it than
-        # neccessary.
-
-        major, _, _ = python_version_tuple()
-        # The cast is needed because apparently some versions return strings
-        # and some return ints.
-        # On my ubuntu with stock 2.6 I get strings, which match the docs.
-        # Someone reported the issue on 2.6.1 on macos, but that was
-        # manually built, not the bundled one. Anyway, cast for safety.
-        major = int(major)
-        if major == 2:
-            self._socket = self._conn.fp._sock.fp._sock
-        else:
-            self._socket = self._conn.fp.raw
-            # our code that reads from the socket expects a method called recv.
-            # py3 socket.SocketIO uses the name read, so alias it.
-            self._socket.recv = self._socket.read
 
         self.connected = True
         if not self.starttime:
@@ -165,44 +126,10 @@ class BaseStream(object):
         if not self._rate_ts:
             self._rate_ts = time.time()
 
-    def _get_oauth_header(self, postdata):
-        """Return the content of the OAuth 1.0a Authorization: header."""
-        # Note: This is a little weird in that we use a library (oauth2) that
-        # is itself completely capable of making HTTP requests, but only to
-        # generate the auth header. We do this, instead of adapting the above
-        # to use oauth2 instead of urllib2, because oauth2 cannot (AFAICT)
-        # open a persistent stream, which obviously we need.
-        #
-        # FIXME: This method is untested with non-empty postdata.
-        conr = oauth2.Consumer(self._consumer_key, self._consumer_secret)
-        token = oauth2.Token(self._access_token, self._access_secret)
-        parms = { 'oauth_version': '1.0',
-                  'oauth_nonce': oauth2.generate_nonce(),
-                  'oauth_timestamp': str(int(time.time())) }
-        method = 'GET'
-        if (postdata):
-            parms.update(postdata)
-            method = 'POST'
-
-        oauths = oauth2.Request(method=method, url=self.url, parameters=parms)
-        # Setting is_form_encoded prevents 'oauth_body_hash', which causes
-        # authentication failure, from being included in the OAuth parameters.
-        # See <https://dev.twitter.com/discussions/4776>. (No, it doesn't make
-        # any sense.)
-        oauths.is_form_encoded = True
-        oauths.sign_request(oauth2.SignatureMethod_HMAC_SHA1(), conr, token)
-        #pprint(oauths)
-
-        # oauths2.Request.to_header() adds a bogus "realm" parameter, so we
-        # mostly stringify ourselves, according to
-        # <https://dev.twitter.com/docs/auth/authorizing-request>.
-        return ('OAuth ' + ', '.join('%s="%s"' % (k, oauth2.escape(v))
-                                     for (k, v) in oauths.iteritems()))
 
     def _get_post_data(self):
         """Subclasses that need to add post data to the request can override
-        this method and return post data. The data should be in the format
-        returned by urllib.urlencode."""
+        this method and return post data. ."""
         return None
 
     def _update_rate(self):
@@ -213,27 +140,13 @@ class BaseStream(object):
             self._rate_ts = time.time()
 
     def __iter__(self):
-        buf = b""
         while True:
             try:
                 if not self.connected:
                     self._init_conn()
 
-                buf += self._socket.recv(8192)
-                if buf == b"":  # something is wrong
-                    self.close()
-                    raise ReconnectLinearlyError("Got entry of length 0. Disconnected")
-                elif buf.isspace():
-                    buf = b""
-                elif b"\r" not in buf: # not enough data yet. Loop around
-                    continue
-
-                lines = buf.split(b"\r")
-                buf = lines[-1]
-                lines = lines[:-1]
-
-                for line in lines:
-                    if line != "\n":
+                for line in self.response.iter_lines():
+                    if line:
                         if (self._raw_mode):
                             tweet = line
                         else:
@@ -241,8 +154,8 @@ class BaseStream(object):
                                 tweet = anyjson.deserialize(line)
                             except ValueError, e:
                                 self.close()                        
-                                raise ReconnectImmediatelyError("Got invalid data from twitter", details=line)
-
+                                raise ReconnectImmediatelyError("Invalid data: %s" % line)
+                                
                         if 'text' in tweet:
                             self.count += 1
                             self._rate_cnt += 1
@@ -275,7 +188,7 @@ class UserStream(BaseStream):
     url = "https://userstream.twitter.com/1.1/user.json"
 
 class FilterStream(BaseStream):
-    url = "https://stream.twitter.com/1/statuses/filter.json"
+    url = "https://stream.twitter.com/1.1/statuses/filter.json"
 
     def __init__(self, consumer_key, consumer_secret, access_token,
                  access_secret, follow=None, locations=None, track=None,
